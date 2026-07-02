@@ -4,7 +4,7 @@
 
 [中文](./README_CN.md)
 
-+ This example is based on RKMPI and Opencv-Mobile for image encoding and streaming
++ This example is based on RKMPI and Opencv-Mobile for image encoding and streaming.
 + This example uses RKNN for image recognition inference.
 + Example code for video capture and streaming specifically developed for Luckfox Pico series development boards.
 
