@@ -34,7 +34,9 @@ select opt in "${libc_options[@]}"; do
 	fi
 done
 
-options=("luckfox_pico_rtsp_opencv"
+options=(
+	"luckfox_pico_jpeg"
+	"luckfox_pico_rtsp_opencv"
 	"luckfox_pico_rtsp_opencv_capture"
 	"luckfox_pico_rtsp_retinaface"
 	"luckfox_pico_rtsp_retinaface_osd"
