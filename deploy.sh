@@ -1,10 +1,6 @@
 #!/bin/bash
-
-
 PC_IP="172.32.0.100/24"
 BOARD_IP="172.32.0.93"
-BOARD_USER="root"
-BOARD_PASS="luckfox"
 TARGET_DIR="/oem/usr/bin"
 
 set_static_ip() {
@@ -25,7 +21,6 @@ set_static_ip() {
     fi
 }
 
-
 main() {
     local FILE_TO_DEPLOY="./build/luckfox_pico_jpeg"
 
@@ -35,13 +30,12 @@ main() {
     echo "Board IP = $BOARD_IP"
     
     # Копируем через ADB
-    echo "📤 Copying to /oem/usr/bin/..."
+    echo "Copying to /oem/usr/bin/..."
     adb push "$FILE_TO_DEPLOY" "$TARGET_DIR/"
     adb shell "chmod +x $TARGET_DIR/$(basename "$FILE_TO_DEPLOY")"
-    adb shell "rm /tmp/*.jpeg"
-    adb shell "rm /tmp/*.jpg"
-    
-    echo "✅ Deployed to $TARGET_DIR/$(basename "$FILE_TO_DEPLOY")"
+    adb shell "rm -f /tmp/*.jpeg 2>/dev/null"
+    adb shell "rm -f /tmp/*.jpg 2>/dev/null"
+    echo "Deployed to $TARGET_DIR/$(basename "$FILE_TO_DEPLOY")"
 
 }
 
