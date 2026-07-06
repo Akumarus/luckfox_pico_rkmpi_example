@@ -37,8 +37,16 @@ static bool quit = false;
 FILE *file = NULL;
 static const RK_CHAR *g_pOutPath = "/tmp/";
 static RK_U32 g_u32FrameCount = 0;
-static const RK_U32 MAX_FRAMES_TO_SAVE = 30; // Сохраняем первые 30 кадров
-static RK_U32 g_saved_frames = 0;
+
+/*
+ * Пропускаем первые SKIP_FRAME_NUM кадров (даём ISP время
+ * доотстроить экспозицию/баланс белого на уже стабилизированном
+ * потоке), сохраняем только последний — 15-й.
+ */
+static const RK_U32 SKIP_FRAME_NUM = 14;
+static const RK_U32 TOTAL_FRAME_NUM = SKIP_FRAME_NUM + 1; // 15
+static RK_U32 g_frame_counter = 0;                        // все полученные кадры (пропуск + финальный)
+static RK_U32 g_saved_frames = 0;                          // 0 или 1 — сохранён ли финальный кадр
 
 static void sigterm_handler(int sig) {
 	fprintf(stderr, "signal %d\n", sig);
@@ -93,29 +101,35 @@ static void *GetMediaBuffer0(void *arg) {
 		return NULL;
 	}
 
-	printf("Saving first %d frames...\n", MAX_FRAMES_TO_SAVE);
+	printf("Skipping first %d frames (ISP calibration), saving only frame #%d...\n",
+	       SKIP_FRAME_NUM, TOTAL_FRAME_NUM);
 
-	while (!quit && g_saved_frames < MAX_FRAMES_TO_SAVE) {
+	while (!quit && g_frame_counter < TOTAL_FRAME_NUM) {
 		s32Ret = RK_MPI_VENC_GetStream(0, &stFrame, 500);
 		if (s32Ret == RK_SUCCESS) {
-			g_saved_frames++;
+			g_frame_counter++;
 
-			// Сохраняем JPEG
-			memset(jpeg_path, 0, sizeof(jpeg_path));
-			snprintf(jpeg_path, sizeof(jpeg_path), "%s/image_%03d.jpg", g_pOutPath,
-			         g_saved_frames);
-			file = fopen(jpeg_path, "wb");
-
-			if (file) {
-				pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
-				fwrite(pData, 1, stFrame.pstPack->u32Len, file);
-				fflush(file);
-				fclose(file);
-				file = NULL;
-				printf("Saved frame %d/%d: %s (size: %d bytes)\n", g_saved_frames,
-				       MAX_FRAMES_TO_SAVE, jpeg_path, stFrame.pstPack->u32Len);
+			if (g_frame_counter < TOTAL_FRAME_NUM) {
+				// "Разогревочный" кадр — просто пропускаем, не сохраняем
+				printf("Skip warm-up frame %d/%d\n", g_frame_counter, SKIP_FRAME_NUM);
 			} else {
-				printf("Failed to open file: %s\n", jpeg_path);
+				// Это 15-й (последний) кадр — сохраняем его
+				memset(jpeg_path, 0, sizeof(jpeg_path));
+				snprintf(jpeg_path, sizeof(jpeg_path), "%s/image.jpg", g_pOutPath);
+				file = fopen(jpeg_path, "wb");
+
+				if (file) {
+					pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
+					fwrite(pData, 1, stFrame.pstPack->u32Len, file);
+					fflush(file);
+					fclose(file);
+					file = NULL;
+					g_saved_frames = 1;
+					printf("Saved frame %d/%d: %s (size: %d bytes)\n", g_frame_counter,
+					       TOTAL_FRAME_NUM, jpeg_path, stFrame.pstPack->u32Len);
+				} else {
+					printf("Failed to open file: %s\n", jpeg_path);
+				}
 			}
 
 			s32Ret = RK_MPI_VENC_ReleaseStream(0, &stFrame);
@@ -123,8 +137,9 @@ static void *GetMediaBuffer0(void *arg) {
 				RK_LOGE("RK_MPI_VENC_ReleaseStream fail %x", s32Ret);
 			}
 
-			if (g_saved_frames >= MAX_FRAMES_TO_SAVE) {
-				printf("\nSuccessfully saved all %d frames!\n", MAX_FRAMES_TO_SAVE);
+			if (g_frame_counter >= TOTAL_FRAME_NUM) {
+				printf("\nDone: skipped %d frames, saved frame #%d!\n", SKIP_FRAME_NUM,
+				       TOTAL_FRAME_NUM);
 				quit = true;
 				break;
 			}
@@ -278,7 +293,8 @@ int main(int argc, char *argv[]) {
 
 	printf("#Resolution: %dx%d\n", u32Width, u32Height);
 	printf("#CameraIdx: %d\n\n", s32chnlId);
-	printf("Will save first %d frames to %s\n", MAX_FRAMES_TO_SAVE, g_pOutPath);
+	printf("Will skip %d frames, then save frame #%d, to %s\n", SKIP_FRAME_NUM,
+	       TOTAL_FRAME_NUM, g_pOutPath);
 
 	signal(SIGINT, sigterm_handler);
 
@@ -362,9 +378,10 @@ int main(int argc, char *argv[]) {
 		VENC_RECV_PIC_PARAM_S stRecvParam;
 
 		printf("\n=== Starting capture ===\n");
-		printf("Saving %d frames...\n", MAX_FRAMES_TO_SAVE);
+		printf("Requesting %d frames (skip %d, save #%d)...\n", TOTAL_FRAME_NUM,
+		       SKIP_FRAME_NUM, TOTAL_FRAME_NUM);
 
-		for (RK_U32 i = 0; i < MAX_FRAMES_TO_SAVE && !quit; i++) {
+		for (RK_U32 i = 0; i < TOTAL_FRAME_NUM && !quit; i++) {
 			memset(&stRecvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
 			stRecvParam.s32RecvPicNum = 1;
 			s32Ret = RK_MPI_VENC_StartRecvFrame(0, &stRecvParam);
@@ -372,12 +389,13 @@ int main(int argc, char *argv[]) {
 				printf("RK_MPI_VENC_StartRecvFrame failed at frame %d!\n", i);
 				break;
 			}
-			printf("Sending capture request %d/%d...\n", i + 1, MAX_FRAMES_TO_SAVE);
+			printf("Sending capture request %d/%d...\n", i + 1, TOTAL_FRAME_NUM);
 			usleep(50000); // 50ms между кадрами
 		}
 
-		// Ждём завершения сохранения всех кадров
-		while (!quit && g_saved_frames < MAX_FRAMES_TO_SAVE) {
+		// Ждём, пока поток не получит все TOTAL_FRAME_NUM кадров
+		// (14 пропущенных + 1 сохранённый)
+		while (!quit && g_frame_counter < TOTAL_FRAME_NUM) {
 			usleep(100000);
 		}
 
@@ -385,7 +403,12 @@ int main(int argc, char *argv[]) {
 		pthread_join(main_thread, NULL);
 
 		printf("\n=== Capture complete ===\n");
-		printf("Saved %d frames to %s\n", g_saved_frames, g_pOutPath);
+		if (g_saved_frames > 0) {
+			printf("Saved frame #%d to %s/image.jpg\n", TOTAL_FRAME_NUM, g_pOutPath);
+		} else {
+			printf("WARNING: final frame was not saved (got %d/%d frames)\n",
+			       g_frame_counter, TOTAL_FRAME_NUM);
+		}
 	}
 
 	ret = 0;
